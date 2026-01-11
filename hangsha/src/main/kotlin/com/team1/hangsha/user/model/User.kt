@@ -9,7 +9,7 @@ import java.time.Instant
 @Table("users")
 data class User (
     @Id var id: Long? = null,
-    var username: String,
+    var username: String?,
     var email: String? = null,
     var profileImageUrl: String? = null,
     @CreatedDate

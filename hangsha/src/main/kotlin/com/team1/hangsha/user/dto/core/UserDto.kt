@@ -4,7 +4,7 @@ import com.team1.hangsha.user.model.User
 
 data class UserDto(
     val id: Long,
-    val username: String,
+    val username: String?,
     val email: String?,
     val profileImageUrl: String?,
 ) {

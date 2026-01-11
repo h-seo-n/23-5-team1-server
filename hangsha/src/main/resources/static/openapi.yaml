@@ -48,7 +48,7 @@ components:
       properties:
         email: { type: string, format: email }
         password: { type: string, minLength: 8 }
-        username: { type: string }
+        username: { type: string, nullable: true }
 
     RegisterResponse:
       type: object
@@ -83,6 +83,7 @@ components:
           description: "provider에서 받은 idToken 또는 accessToken"
         username:
           type: string
+          nullable: true
         email:
           type: string
           format: email
@@ -93,7 +94,7 @@ components:
       required: [id]
       properties:
         id: { type: integer, format: int64 }
-        username: { type: string }
+        username: { type: string, nullable: true }
         email: { type: string, format: email, nullable: true }
         profileImageUrl: { type: string, nullable: true }
 
