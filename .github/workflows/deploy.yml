@@ -65,13 +65,13 @@ jobs:
               chmod +x ~/.docker/cli-plugins/docker-compose
             fi
 
-            # 레거시 컨테이너 충돌 제거 (campus-server 관련 찌꺼기)
+            # ✅ 레거시 컨테이너 충돌 제거 (app만)
             docker rm -f campus-server 2>/dev/null || true
             docker ps -a --filter "name=_campus-server" -q | xargs -r docker rm -f
 
             export DOCKER_USERNAME="${{ secrets.DOCKER_USERNAME }}"
 
-            # compose 파일 덮어쓰기 (현재 디렉토리 기준)
+            # compose 파일 덮어쓰기
             cat > docker-compose.prod.yml <<EOF
             version: '3.8'
             services:
@@ -108,29 +108,21 @@ jobs:
                   retries: 5
             EOF
 
-            # ✅ 프로젝트명 고정 (네트워크/서비스명(db) 안정화)
             COMPOSE="docker compose -p campus -f docker-compose.prod.yml"
 
-            # app 이미지 pull
+            # ✅ app만 pull
             $COMPOSE pull app
 
-            # ✅ db 먼저 up (없으면 띄우고, 있으면 그대로)
-            $COMPOSE up -d db
-
-            # db healthy 기다리기(최대 2분)
-            echo "Waiting for DB to be healthy..."
-            for i in {1..24}; do
-              status="$(docker inspect -f '{{.State.Health.Status}}' campus-mysql 2>/dev/null || echo unknown)"
-              echo "db health: $status"
-              [ "$status" = "healthy" ] && break
-              sleep 5
-            done
-
-            # app up (db는 유지)
+            # ✅ db는 올리지 않음. (이미 떠있으면 그대로 쓰게)
             $COMPOSE up -d --no-deps app
 
-            # ✅ app health(HTTP) 대기: 실패하면 로그 출력하고 실패 처리
-            echo "Waiting for app HTTP..."
+            echo "=== ps ==="
+            $COMPOSE ps || true
+
+            echo "=== app logs(tail) ==="
+            docker logs --tail 200 campus-server || true
+
+            echo "=== health (wait up to 60s) ==="
             for i in {1..30}; do
               if curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null; then
                 echo "✅ app is responding"
@@ -138,18 +130,4 @@ jobs:
               fi
               sleep 2
             done
-
-            echo "=== compose ps ==="
-            $COMPOSE ps || true
-
-            echo "=== curl health (headers) ==="
             curl -sS -D- http://127.0.0.1:8080/api/v1/health || true
-
-            echo "=== app logs (tail) ==="
-            docker logs --tail 200 campus-server || true
-
-            echo "=== db logs (tail) ==="
-            docker logs --tail 80 campus-mysql || true
-
-            # 최종 체크: 그래도 health 안 되면 실패로 처리(다음 로그에서 원인 확인)
-            curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null
