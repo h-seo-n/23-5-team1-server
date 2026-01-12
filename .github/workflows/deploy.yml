@@ -37,38 +37,46 @@ jobs:
           tags: ${{ secrets.DOCKER_USERNAME }}/campus-calendar-server:latest
 
       - name: Deploy to EC2
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_KEY }}
-          script_stop: true
+          port: 22
           script: |
             set -euo pipefail
 
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-            # docker compose(v2) 없으면 설치 (Ubuntu/Debian 계열 가정)
+            # docker compose(v2) 없으면 직접 설치 (apt 필요 없음)
             if ! docker compose version >/dev/null 2>&1; then
-              sudo apt-get update
-              sudo apt-get install -y docker-compose-plugin
+              ARCH="$(uname -m)"
+              case "$ARCH" in
+                x86_64|amd64) BIN="x86_64" ;;
+                aarch64|arm64) BIN="aarch64" ;;
+                *) echo "Unsupported arch: $ARCH"; exit 1 ;;
+              esac
+
+              VER="v2.24.6"
+              mkdir -p ~/.docker/cli-plugins
+              curl -fsSL "https://github.com/docker/compose/releases/download/${VER}/docker-compose-linux-${BIN}" \
+                -o ~/.docker/cli-plugins/docker-compose
+              chmod +x ~/.docker/cli-plugins/docker-compose
+              docker compose version
             fi
 
-            # docker-compose 파일 덮어쓰기
-            cat <<EOF > docker-compose.prod.yml
+            # (중요) heredoc는 반드시 EOF가 '맨 앞(공백 없이)'에서 닫혀야 함
+            cat > docker-compose.prod.yml <<'EOF'
             services:
               app:
-                image: ${{ secrets.DOCKER_USERNAME }}/campus-calendar-server:latest
+                image: ${DOCKER_USERNAME}/campus-calendar-server:latest
                 container_name: campus-server
                 ports:
                   - "8080:8080"
-                environment:
-                  SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/campus_db?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
-                  SPRING_DATASOURCE_USERNAME: user
-                  SPRING_DATASOURCE_PASSWORD: password
                 depends_on:
                   - db
                 restart: always
+
               db:
                 image: mysql:8.0
                 container_name: campus-mysql
@@ -83,10 +91,12 @@ jobs:
                 restart: always
             EOF
 
-            # (중요) 기존 app 컨테이너가 꼬여 있으면 recreate에서 또 터질 수 있어서 제거
+            # DOCKER_USERNAME 치환
+            export DOCKER_USERNAME="${{ secrets.DOCKER_USERNAME }}"
+            sed -i "s|\${DOCKER_USERNAME}|${DOCKER_USERNAME}|g" docker-compose.prod.yml
+
+            # 기존 컨테이너 꼬임 방지 (v1 KeyError 재발도 같이 방지)
             docker rm -f campus-server 2>/dev/null || true
 
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans --force-recreate
-
-            docker image prune -f
