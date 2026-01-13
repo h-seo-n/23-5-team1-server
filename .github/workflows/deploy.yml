@@ -36,7 +36,7 @@ jobs:
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/campus-calendar-server:latest
 
-      - name: Deploy to EC2
+      - name: Deploy to EC2 (debug)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -47,56 +47,27 @@ jobs:
           command_timeout: 40m
           script: |
             set -euo pipefail
-
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-            # docker compose(v2) 없으면 설치(apt 없이)
-            if ! docker compose version >/dev/null 2>&1; then
-              ARCH="$(uname -m)"
-              case "$ARCH" in
-                x86_64|amd64) BIN="x86_64" ;;
-                aarch64|arm64) BIN="aarch64" ;;
-                *) echo "Unsupported arch: $ARCH"; exit 1 ;;
-              esac
-              VER="v2.24.6"
-              mkdir -p ~/.docker/cli-plugins
-              curl -fsSL "https://github.com/docker/compose/releases/download/${VER}/docker-compose-linux-${BIN}" \
-                -o ~/.docker/cli-plugins/docker-compose
-              chmod +x ~/.docker/cli-plugins/docker-compose
-            fi
 
             export DOCKER_USERNAME="${{ secrets.DOCKER_USERNAME }}"
             PROJECT="campus"
             NET="${PROJECT}_default"
 
-            # ✅ 네트워크 보장
             docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET"
 
-            # ✅ DB 컨테이너 자동 탐색(가장 안전한 규칙: 이름에 campus-mysql 포함 우선)
             DB_CONTAINER="$(docker ps -a --format '{{.Names}}' | grep -m1 'campus-mysql' || true)"
             if [ -z "$DB_CONTAINER" ]; then
-              # fallback: mysql:8.0 중 아무거나
               DB_CONTAINER="$(docker ps -a --filter 'ancestor=mysql:8.0' --format '{{.Names}}' | head -n1 || true)"
             fi
             if [ -z "$DB_CONTAINER" ]; then
-              echo "ERROR: No DB container found (name contains campus-mysql, or mysql:8.0)."
-              docker ps -a
-              exit 1
+              echo "ERROR: No DB container found."; docker ps -a; exit 1
             fi
-            echo "DB_CONTAINER=$DB_CONTAINER"
-
-            # ✅ DB 시작 + 네트워크 alias=db로 연결
             docker start "$DB_CONTAINER" >/dev/null 2>&1 || true
             docker network connect --alias db "$NET" "$DB_CONTAINER" >/dev/null 2>&1 || true
 
-            echo "=== db network check ==="
-            docker inspect -f '{{json .NetworkSettings.Networks}}' "$DB_CONTAINER" || true
-
-            # ✅ app 컨테이너 정리(충돌/레거시)
             docker rm -f campus-server 2>/dev/null || true
             docker ps -a --filter "name=_campus-server" -q | xargs -r docker rm -f
 
-            # ✅ compose 파일 (app만 관리, 네트워크는 외부 NET 사용)
             cat > docker-compose.prod.yml <<EOF
             version: '3.8'
             services:
@@ -112,50 +83,40 @@ jobs:
                 networks:
                   - ${NET}
                 restart: always
-
             networks:
               ${NET}:
                 external: true
             EOF
 
             COMPOSE="docker compose -p ${PROJECT} -f docker-compose.prod.yml"
-
-            # ✅ app pull + up
             $COMPOSE pull app
             $COMPOSE up -d --no-deps app
-
-            # ✅ app도 네트워크 붙었는지 확인
-            echo "=== app network check ==="
-            docker inspect -f '{{json .NetworkSettings.Networks}}' campus-server || true
 
             echo "=== ps ==="
             docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
-            # ✅ restart/exit 상태 출력 (죽는지 바로 보임)
             echo "=== app state ==="
-            docker inspect -f 'status={{.State.Status}} restarting={{.State.Restarting}} restartCount={{.RestartCount}} exit={{.State.ExitCode}} startedAt={{.State.StartedAt}} finishedAt={{.State.FinishedAt}}' campus-server || true
+            docker inspect -f 'status={{.State.Status}} restarting={{.State.Restarting}} restartCount={{.RestartCount}} exit={{.State.ExitCode}} startedAt={{.State.StartedAt}}' campus-server || true
 
-            # ✅ 로그 강제 출력(컨테이너가 금방 죽어도 남아있음)
-            echo "=== app logs (tail 300) ==="
-            docker logs --tail 300 campus-server || true
+            echo "=== docker logs (tail 400) ==="
+            docker logs --tail 400 campus-server || true
 
-            # ✅ (중요) DB TCP 연결 테스트: app 컨테이너에서 db:3306 찍어보기
-            echo "=== db tcp check from app container ==="
-            docker exec campus-server sh -lc 'apk add --no-cache busybox-extras >/dev/null 2>&1 || true; nc -vz db 3306 || true' || true
+            echo "=== inside container: ps/net/health ==="
+            docker exec campus-server sh -lc '
+              set -x
+              ps aux || true
+              (ss -lntp || netstat -lntp) 2>/dev/null || true
+              env | grep -E "SPRING_|JAVA|SERVER" || true
+              (wget -qS -O- http://127.0.0.1:8080/ 2>&1 | head -n 20) || true
+              (wget -qS -O- http://127.0.0.1:8080/api/v1/health 2>&1 | head -n 50) || true
+            ' || true
 
-            # ✅ health: 호스트+컨테이너 내부 둘 다 체크
-            echo "=== health wait (up to 120s) ==="
-            for i in {1..60}; do
-              if curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null; then
-                echo "✅ host->app health OK"
-                break
-              fi
-              sleep 2
-            done
+            echo "=== host curl ==="
             curl -sS -D- http://127.0.0.1:8080/api/v1/health || true
 
-            echo "=== container-internal health ==="
-            docker exec campus-server sh -lc 'wget -qO- http://127.0.0.1:8080/api/v1/health || true' || true
-
-            # 최종 실패 처리(health 안 되면 exit 1)
+            # 최종: 120초 기다렸다가 다시 확인
+            echo "=== wait 120s then curl ==="
+            sleep 120
+            docker logs --tail 400 campus-server || true
+            docker exec campus-server sh -lc 'wget -qS -O- http://127.0.0.1:8080/api/v1/health 2>&1 | head -n 80 || true' || true
             curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null
