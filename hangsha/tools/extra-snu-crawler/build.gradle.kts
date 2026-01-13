@@ -17,8 +17,8 @@ dependencies {
     implementation("org.jsoup:jsoup:1.17.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // “가능성 보여주기용” DB 저장 (나중에 Spring에 붙이면 여기 빼도 됨)
-    implementation("com.mysql:mysql-connector-j:8.4.0")
+    // For crawler: json parser
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 
     // 로그(선택)
     implementation("org.slf4j:slf4j-simple:2.0.16")
