@@ -34,4 +34,7 @@ enum class ErrorCode(
         "비밀번호에 공백을 사용할 수 없습니다"
     ),
 
+    // Category
+    CATEGORY_GROUP_NOT_FOUND(HttpStatus.NOT_FOUND, "카테고리 그룹을 찾을 수 없습니다"),
+    CATEGORY_NOT_FOUND(HttpStatus.NOT_FOUND, "카테고리를 찾을 수 없습니다"),
 }

@@ -1,4 +1,8 @@
 package com.team1.hangsha.category.dto.core
 
-class CategoryDto {
-}
+data class CategoryDto(
+    val id: Long,
+    val groupId: Long,
+    val name: String,
+    val sortOrder: Int
+)
