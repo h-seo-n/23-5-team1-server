@@ -5,4 +5,6 @@ import org.springframework.data.repository.CrudRepository
 
 interface CategoryGroupRepository : CrudRepository<CategoryGroup, Long> {
     fun findByName(name: String): CategoryGroup?
+
+    fun findAllByOrderBySortOrderAsc(): List<CategoryGroup>
 }

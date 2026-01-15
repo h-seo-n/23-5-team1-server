@@ -14,6 +14,7 @@ data class Category(
     val groupId: Long,
     val name: String,
     val sortOrder: Int = 0,
+
     @CreatedDate
     val createdAt: Instant? = null
 )
