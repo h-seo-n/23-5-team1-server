@@ -3,24 +3,10 @@ spring:
     name: CampusCalendar
 
   datasource:
-    url: jdbc:mysql://localhost:3307/campus_db?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+    url: jdbc:mysql://localhost:3307/campus_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Seoul&characterEncoding=UTF-8
     username: user     # docker-compose.yml과 일치
     password: password
     driver-class-name: com.mysql.cj.jdbc.Driver
-
-  #flyway:
-  #  enabled: true
-  #  baseline-on-migrate: true # 기존 데이터가 있어도 마이그레이션 실행
-  #  locations: classpath:db.migration
-
-  jpa:
-    hibernate:
-      ddl-auto: update # 배포 시엔 validate or none
-    properties:
-      hibernate:
-        format_sql: true
-        show_sql: true
-    defer-datasource-initialization: true
 
   servlet:
     multipart:
@@ -40,4 +26,9 @@ springdoc:
 
 jwt:
   secret: "v3rys3cr3tk3y_must_be_l0ng_enough_to_be_secure_minimum_256_bits"
-  expiration: 86400000
+  access-expiration-ms: 3600000
+  refresh-expiration-ms: 1209600000
+
+# Variable for the crawler
+crawler:
+  events-json-path: tools/extra-snu-crawler/events.json

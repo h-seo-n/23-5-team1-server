@@ -1,4 +1,6 @@
 package com.team1.hangsha.user.dto
 
-class LoginRequest {
-}
+data class LoginRequest(
+    val email: String,
+    val password: String,
+)
