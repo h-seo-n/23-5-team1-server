@@ -17,7 +17,7 @@ data class Event(
     val imageUrl: String? = null,
     val operationMode: String? = null,
 
-    val tags: List<String>? = null,
+    val tags: String? = null,
     val mainContentHtml: String? = null,
 
     val statusId: Long? = null,

@@ -100,7 +100,7 @@ class EventSyncService(
                 location = location,
                 applyLink = applyLink,
 
-                tags = cleanedTags,
+                tags = if (cleanedTags.isEmpty()) null else objectMapper.writeValueAsString(cleanedTags),
                 mainContentHtml = e.mainContentHtml,
 
                 createdAt = existing?.createdAt ?: Instant.now(),
