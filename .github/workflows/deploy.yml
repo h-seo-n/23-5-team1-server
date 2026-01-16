@@ -71,7 +71,7 @@ jobs:
             docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET"
 
             # workflow_dispatch input; default false on push
-            RESET_DB="${{ github.event.inputs.reset_db }}"
+            RESET_DB=true
             if [ -z "${RESET_DB:-}" ]; then RESET_DB="false"; fi
             echo "RESET_DB=$RESET_DB"
 
