@@ -644,6 +644,12 @@ components:
     CourseTimeSlotDto:
       type: object
       required: [ dayOfWeek, startAt, endAt ]
+      description: |
+        시간 슬롯 단위.
+        서버 검증 규칙:
+        - startAt < endAt 이어야 함
+        - startAt은 endAt보다 같거나 클 수 없음
+        - 위반 시 400 INVALID_TIME_SLOT
       properties:
         dayOfWeek:
           $ref: '#/components/schemas/DayOfWeek'
@@ -651,12 +657,15 @@ components:
         startAt:
           type: integer
           format: int64
+          minimum: 0
+          maximum: 1439
           description: "분 단위 (예: 630 = 10:30)"
 
         endAt:
           type: integer
           format: int64
-
+          minimum: 1
+          maximum: 1440
 
     # 추후 검색 기능 도입 시 필요
     CourseSearchResponse:
@@ -1481,7 +1490,12 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/EnrollResponse' }
         "400":
-          description: Bad Request (필수값 누락/형식 오류, timeSlots 빈 배열/NULL, courseTitle NULL 등)
+          description: |
+            Bad Request.
+            다음 경우 발생:
+            - timeSlots가 null 또는 빈 배열
+            - CourseTimeSlotDto에서 startAt >= endAt
+            - 시간 범위가 0~1440을 벗어남
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

@@ -81,12 +81,7 @@ class EnrollService(
         if (req.year != timetable.year || req.semester != timetable.semester) {
             throw DomainException(ErrorCode.TIMETABLE_TERM_MISMATCH)
         }
-        if (req.courseTitle.isBlank()) {
-            throw DomainException(ErrorCode.COURSE_TITLE_CANNOT_BE_BLANK)
-        }
-        if (req.timeSlots.isEmpty()) {
-            throw DomainException(ErrorCode.TIME_SLOTS_CANNOT_BE_EMPTY)
-        }
+
 
         val course = courseRepository.save(
             Course(

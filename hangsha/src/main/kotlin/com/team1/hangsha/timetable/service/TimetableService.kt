@@ -52,7 +52,6 @@ class TimetableService(
     // -------------------------
     @Transactional
     fun createTimetable(userId: Long, req: CreateTimetableRequest): TimetableResponse {
-        if (req.name.isBlank()) throw DomainException(ErrorCode.TIMETABLE_NAME_CANNOT_BE_BLANK)
 
         val saved = timetableRepository.save(
             Timetable(
@@ -71,7 +70,6 @@ class TimetableService(
     // -------------------------
     @Transactional
     fun updateTimetable(userId: Long, timetableId: Long, req: UpdateTimetableRequest): TimetableResponse {
-        if (req.name.isBlank()) throw DomainException(ErrorCode.TIMETABLE_NAME_CANNOT_BE_BLANK)
 
         val tt = getOwnedTimetable(userId, timetableId)
         tt.name = req.name.trim()
