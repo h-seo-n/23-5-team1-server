@@ -5,11 +5,14 @@ import com.team1.hangsha.common.error.ErrorCode
 import com.team1.hangsha.event.dto.core.EventDto
 import com.team1.hangsha.event.dto.response.Calendar.MonthEventResponse
 import com.team1.hangsha.event.dto.response.DetailEventResponse
+import com.team1.hangsha.event.dto.response.Calendar.DayEventResponse
+import com.team1.hangsha.event.dto.response.TitleSearchEventResponse
 import com.team1.hangsha.event.model.Event
 import com.team1.hangsha.event.repository.EventQueryRepository
 import com.team1.hangsha.event.repository.EventRepository
 import org.springframework.stereotype.Service
 import java.time.LocalDate
+import kotlin.math.max
 
 @Service
 class EventService(
@@ -63,6 +66,53 @@ class EventService(
             DomainException(ErrorCode.EVENT_NOT_FOUND)
         }
         return event.toDetailResponse()
+    }
+
+    fun getDayEvents(
+        date: LocalDate,
+        page: Int,
+        size: Int,
+        statusIds: List<Long>?,
+        eventTypeIds: List<Long>?,
+        orgIds: List<Long>?,
+    ): DayEventResponse {
+        val total = eventQueryRepository.countOnDay(date, statusIds, eventTypeIds, orgIds)
+        val items = eventQueryRepository.findOnDayPaged(date, statusIds, eventTypeIds, orgIds, page, size)
+            .map { it.toDto() }
+
+        return DayEventResponse(
+            page = max(1, page),
+            size = max(1, size),
+            total = total,
+            date = date,
+            items = items,
+        )
+    }
+
+    fun searchTitle(
+        query: String,
+        page: Int,
+        size: Int,
+    ): TitleSearchEventResponse {
+        val q = query.trim()
+        if (q.isEmpty()) {
+            throw DomainException(ErrorCode.INVALID_REQUEST, "query는 비어있을 수 없습니다")
+        }
+
+        val safePage = max(1, page)
+        val safeSize = max(1, size)
+        val offset = (safePage - 1) * safeSize
+
+        val total = eventQueryRepository.countByTitleContains(q)
+        val items = eventQueryRepository.findByTitleContainsPaged(q, offset, safeSize)
+            .map { it.toDto() }
+
+        return TitleSearchEventResponse(
+            page = safePage,
+            size = safeSize,
+            total = total,
+            items = items,
+        )
     }
 }
 
