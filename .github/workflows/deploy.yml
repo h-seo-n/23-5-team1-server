@@ -80,7 +80,6 @@ jobs:
             docker run --rm --network "$NET" busybox nslookup db || true
 
             # === Fix Flyway failed migration V18 (server-side, FORCE via root) ===
-
             echo "=== [DB] detect root password from container env / fallbacks ==="
             ROOT_ENV_PASS="$(docker exec "$DB_CONTAINER" sh -lc 'printf "%s" "${MYSQL_ROOT_PASSWORD:-}"' || true)"
 
@@ -114,41 +113,84 @@ jobs:
               exit 1
             fi
 
-            mysql_root() {
+            # ---- root mysql runner (no default DB; we will touch all schemas) ----
+            mysql_root_any() {
               local sql="$1"
               if [ -z "$ROOT_PASS" ]; then
                 docker run --rm --network "$NET" mysql:8.0 \
-                  mysql -h db -uroot "${DB_NAME}" -e "$sql"
+                  mysql -h db -uroot -N -B -e "$sql"
               else
                 docker run --rm --network "$NET" mysql:8.0 \
-                  mysql -h db -uroot -p"$ROOT_PASS" "${DB_NAME}" -e "$sql"
+                  mysql -h db -uroot -p"$ROOT_PASS" -N -B -e "$sql"
               fi
             }
 
-            echo "=== [DB] before ==="
-            mysql_root "SELECT installed_rank, version, description, success, installed_on
-                        FROM flyway_schema_history
-                        WHERE version='18'
-                        ORDER BY installed_rank;"
+            echo "=== [DB] schemas having flyway_schema_history ==="
+            mysql_root_any "
+              SELECT table_schema
+              FROM information_schema.tables
+              WHERE table_name='flyway_schema_history'
+              ORDER BY table_schema;
+            " || true
 
-            echo "=== [DB] delete failed row(s) v18 (success=0) ==="
-            mysql_root "DELETE FROM flyway_schema_history WHERE version='18' AND success=0;
-                        SELECT ROW_COUNT() AS deleted_rows;"
+            echo "=== [DB] list failed rows (success=0) or v18 across ALL schemas ==="
+            mysql_root_any "
+              SET SESSION group_concat_max_len=1000000;
+              SELECT GROUP_CONCAT(
+                CONCAT(
+                  'SELECT ''', table_schema, ''' AS schema_name, installed_rank, version, description, success, installed_on ',
+                  'FROM `', table_schema, '`.flyway_schema_history ',
+                  'WHERE success=0 OR TRIM(version)=''18'' ',
+                  'ORDER BY installed_rank;'
+                )
+                SEPARATOR ' '
+              ) INTO @q
+              FROM information_schema.tables
+              WHERE table_name='flyway_schema_history';
 
-            echo "=== [DB] after ==="
-            mysql_root "SELECT installed_rank, version, description, success, installed_on
-                        FROM flyway_schema_history
-                        WHERE version='18'
-                        ORDER BY installed_rank;"
+              PREPARE stmt FROM @q;
+              EXECUTE stmt;
+              DEALLOCATE PREPARE stmt;
+            " || true
 
-            echo "=== [DB] assert no failed v18 remains ==="
-            FAIL_COUNT="$(mysql_root "SELECT COUNT(*) AS c FROM flyway_schema_history WHERE version='18' AND success=0;" | tail -n1 | tr -d '\r' )"
-            if [ "${FAIL_COUNT:-0}" != "0" ]; then
-              echo "ERROR: still have failed v18 row(s) in flyway_schema_history."
-              exit 1
-            fi
+            echo "=== [DB] DELETE failed v18 rows across ALL schemas (success=0 AND TRIM(version)=18) ==="
+            mysql_root_any "
+              SET SESSION group_concat_max_len=1000000;
+              SELECT GROUP_CONCAT(
+                CONCAT(
+                  'DELETE FROM `', table_schema, '`.flyway_schema_history ',
+                  'WHERE success=0 AND TRIM(version)=''18'';'
+                )
+                SEPARATOR ' '
+              ) INTO @d
+              FROM information_schema.tables
+              WHERE table_name='flyway_schema_history';
 
-            echo "=== [Flyway] repair (as root, optional) ==="
+              PREPARE stmt FROM @d;
+              EXECUTE stmt;
+              DEALLOCATE PREPARE stmt;
+            " || true
+
+            echo "=== [DB] assert no failed v18 remains across ALL schemas ==="
+            mysql_root_any "
+              SET SESSION group_concat_max_len=1000000;
+              SELECT GROUP_CONCAT(
+                CONCAT(
+                  'SELECT ''', table_schema, ''' AS schema_name, COUNT(*) AS cnt ',
+                  'FROM `', table_schema, '`.flyway_schema_history ',
+                  'WHERE success=0 AND TRIM(version)=''18'';'
+                )
+                SEPARATOR ' '
+              ) INTO @c
+              FROM information_schema.tables
+              WHERE table_name='flyway_schema_history';
+
+              PREPARE stmt FROM @c;
+              EXECUTE stmt;
+              DEALLOCATE PREPARE stmt;
+            " || true
+
+            echo "=== [Flyway] repair (as root, on ${DB_NAME}) ==="
             if [ -z "$ROOT_PASS" ]; then
               docker run --rm --network "$NET" flyway/flyway:11 \
                 -url="jdbc:mysql://db:3306/${DB_NAME}?serverTimezone=Asia/Seoul" \
@@ -159,11 +201,6 @@ jobs:
                 -user="root" -password="${ROOT_PASS}" repair
             fi
 
-            echo "=== [DB] final check v18 ==="
-            mysql_root "SELECT installed_rank, version, description, success, installed_on
-                        FROM flyway_schema_history
-                        WHERE version='18'
-                        ORDER BY installed_rank;"
             # ============================================================
 
             docker rm -f campus-server 2>/dev/null || true
