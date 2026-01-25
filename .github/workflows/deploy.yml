@@ -3,6 +3,12 @@ name: Deploy to EC2
 on:
   push:
     branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      reset_db:
+        description: "DANGER: reset MySQL container + data (true/false)"
+        required: false
+        default: "true"
 
 jobs:
   build-and-deploy:
@@ -47,133 +53,120 @@ jobs:
           command_timeout: 40m
           script: |
             set -euo pipefail
+
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
             export DOCKER_USERNAME="${{ secrets.DOCKER_USERNAME }}"
             PROJECT="campus"
             NET="${PROJECT}_default"
 
-            # ==== DB settings (keep in sync with your DB container) ====
+            # ==== DB settings (from repo docker-compose/application.yml) ====
             DB_NAME="campus_db"
             DB_USER="user"
             DB_PASS="password"
-            # ===========================================================
+            DB_ROOT_PASS="root"
+            DB_CONTAINER_NAME="campus-mysql"
+            # ===============================================================
 
             docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET"
 
-            # Find DB container (campus-mysql or project-prefixed _campus-mysql)
-            DB_CONTAINER="$(docker ps -a --format '{{.Names}}' | grep -E '(^campus-mysql$|_campus-mysql$)' | head -n1 || true)"
-            if [ -z "$DB_CONTAINER" ]; then
-              DB_CONTAINER="$(docker ps -a --filter 'ancestor=mysql:8.0' --format '{{.Names}}' | head -n1 || true)"
+            # workflow_dispatch input; default false on push
+            RESET_DB=true
+            if [ -z "${RESET_DB:-}" ]; then RESET_DB="false"; fi
+            echo "RESET_DB=$RESET_DB"
+
+            # ===== helper: find DB containers (campus-mysql or *_campus-mysql) =====
+            find_db_containers() {
+              docker ps -a --format '{{.Names}}' | grep -E '(^campus-mysql$|_campus-mysql$)' || true
+            }
+
+            # ===== DANGER: reset DB (container + volumes/bind data) =====
+            if [ "$RESET_DB" = "true" ]; then
+              echo "!!! RESETTING DB (container + data) !!!"
+
+              # Stop app first
+              docker rm -f campus-server 2>/dev/null || true
+              docker ps -a --filter "name=_campus-server" -q | xargs -r docker rm -f
+
+              DBS="$(find_db_containers)"
+              if [ -n "$DBS" ]; then
+                echo "$DBS" | while read -r c; do
+                  [ -z "$c" ] && continue
+                  echo "Resetting DB container: $c"
+
+                  # Remove named volumes + delete bind source for /var/lib/mysql
+                  # 1) named volumes
+                  VOLS="$(docker inspect -f '{{range .Mounts}}{{if and (eq .Type "volume") (eq .Destination "/var/lib/mysql")}}{{.Name}}{{"\n"}}{{end}}{{end}}' "$c" 2>/dev/null || true)"
+                  # 2) bind mount source (host path)
+                  BINDS="$(docker inspect -f '{{range .Mounts}}{{if and (eq .Type "bind") (eq .Destination "/var/lib/mysql")}}{{.Source}}{{"\n"}}{{end}}{{end}}' "$c" 2>/dev/null || true)"
+
+                  docker rm -f "$c" >/dev/null 2>&1 || true
+
+                  echo "$VOLS" | sed '/^\s*$/d' | while read -r v; do
+                    echo "Removing volume: $v"
+                    docker volume rm -f "$v" >/dev/null 2>&1 || true
+                  done
+
+                  echo "$BINDS" | sed '/^\s*$/d' | while read -r p; do
+                    echo "Removing bind data dir: $p"
+                    sudo rm -rf "$p" || true
+                  done
+                done
+              else
+                echo "No existing DB container found. Creating a new one."
+              fi
+
+              # Create fresh MySQL container (matches repo docker-compose settings)
+              docker run -d \
+                --name "$DB_CONTAINER_NAME" \
+                --network "$NET" \
+                --restart always \
+                -e MYSQL_DATABASE="$DB_NAME" \
+                -e MYSQL_ROOT_PASSWORD="$DB_ROOT_PASS" \
+                -e MYSQL_USER="$DB_USER" \
+                -e MYSQL_PASSWORD="$DB_PASS" \
+                mysql:8.0 \
+                --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+              # Wait until MySQL is ready (up to 90s)
+              echo "Waiting for MySQL to be ready..."
+              for i in $(seq 1 90); do
+                if docker exec "$DB_CONTAINER_NAME" mysqladmin ping -uroot -p"$DB_ROOT_PASS" --silent 2>/dev/null; then
+                  echo "MySQL is ready."
+                  break
+                fi
+                sleep 1
+              done
+
+              docker network connect --alias db "$NET" "$DB_CONTAINER_NAME" >/dev/null 2>&1 || true
             fi
+            # ===== end reset =====
+
+            # Ensure DB container exists and is connected with alias db
+            DB_CONTAINER="$(find_db_containers | head -n1 || true)"
             if [ -z "$DB_CONTAINER" ]; then
-              echo "ERROR: No DB container found."
-              docker ps -a
-              exit 1
+              echo "ERROR: No DB container found."; docker ps -a; exit 1
             fi
 
             docker start "$DB_CONTAINER" >/dev/null 2>&1 || true
-
-            # Ensure hostname "db" is ALWAYS resolvable inside the network
             docker network disconnect "$NET" "$DB_CONTAINER" >/dev/null 2>&1 || true
             docker network connect --alias db "$NET" "$DB_CONTAINER" >/dev/null 2>&1 || true
 
-            # (Optional) quick DNS check
-            docker run --rm --network "$NET" busybox nslookup db || true
-
-            # === Fix Flyway failed migration V18 (server-side, FORCE via root) ===
-            echo "=== [DB] detect root password from container env / fallbacks ==="
-            ROOT_ENV_PASS="$(docker exec "$DB_CONTAINER" sh -lc 'printf "%s" "${MYSQL_ROOT_PASSWORD:-}"' || true)"
-
-            try_mysql_root() {
-              local pass="$1"
-              if [ -z "$pass" ]; then
-                docker run --rm --network "$NET" mysql:8.0 \
-                  mysql -h db -uroot -e "SELECT 1;" >/dev/null 2>&1
-              else
-                docker run --rm --network "$NET" mysql:8.0 \
-                  mysql -h db -uroot -p"$pass" -e "SELECT 1;" >/dev/null 2>&1
+            # Safety: if NOT resetting, detect old Flyway version 9 applied (common cause of boot failure)
+            if [ "$RESET_DB" != "true" ]; then
+              echo "Checking Flyway history (non-reset deploy)..."
+              set +e
+              HAS_V9="$(docker exec "$DB_CONTAINER" sh -lc "mysql -u\"$DB_USER\" -p\"$DB_PASS\" -D\"$DB_NAME\" -N -e \"SELECT 1 FROM flyway_schema_history WHERE version='9' LIMIT 1;\" 2>/dev/null" )"
+              set -e
+              if [ "$HAS_V9" = "1" ]; then
+                echo "ERROR: flyway_schema_history has version=9 already applied. This often breaks if V9 migration file is missing in the app image."
+                echo "Run this workflow manually with workflow_dispatch input reset_db=true to wipe DB, or restore the V9 migration file in the repo."
+                exit 1
               fi
-            }
-
-            ROOT_PASS=""
-            if [ -n "$ROOT_ENV_PASS" ] && try_mysql_root "$ROOT_ENV_PASS"; then
-              ROOT_PASS="$ROOT_ENV_PASS"
-            else
-              for cand in "" "root" "password" "${DB_PASS}"; do
-                if try_mysql_root "$cand"; then
-                  ROOT_PASS="$cand"
-                  break
-                fi
-              done
             fi
-
-            if ! try_mysql_root "$ROOT_PASS"; then
-              echo "ERROR: Cannot connect to MySQL as root. Check MYSQL_ROOT_PASSWORD in DB container env."
-              echo "DB container env (filtered):"
-              docker exec "$DB_CONTAINER" sh -lc 'env | grep -E "MYSQL_|MARIADB_" || true'
-              exit 1
-            fi
-
-            mysql_root_db_stdin() {
-              if [ -z "$ROOT_PASS" ]; then
-                docker run --rm --network "$NET" -i mysql:8.0 \
-                  mysql -h db -uroot "${DB_NAME}"
-              else
-                docker run --rm --network "$NET" -i mysql:8.0 \
-                  mysql -h db -uroot -p"$ROOT_PASS" "${DB_NAME}"
-              fi
-            }
-
-            echo "=== [DB] before (v18 or any failed rows) ==="
-            cat <<'SQL' | mysql_root_db_stdin
-            SELECT installed_rank, version, description, success, installed_on
-            FROM flyway_schema_history
-            WHERE TRIM(version)='18' OR success=0
-            ORDER BY installed_rank;
-            SQL
-
-            echo "=== [DB] delete failed v18 rows (success=0) ==="
-            cat <<'SQL' | mysql_root_db_stdin
-            DELETE FROM flyway_schema_history
-            WHERE TRIM(version)='18' AND success=0;
-            SELECT ROW_COUNT() AS deleted_rows;
-            SQL
-
-            echo "=== [DB] after (v18 or any failed rows) ==="
-            cat <<'SQL' | mysql_root_db_stdin
-            SELECT installed_rank, version, description, success, installed_on
-            FROM flyway_schema_history
-            WHERE TRIM(version)='18' OR success=0
-            ORDER BY installed_rank;
-            SQL
-
-            echo "=== [DB] assert v18 failed count ==="
-            V18_FAIL_COUNT="$(cat <<'SQL' | mysql_root_db_stdin | tail -n1 | tr -d '\r'
-            SELECT COUNT(*) AS c
-            FROM flyway_schema_history
-            WHERE TRIM(version)='18' AND success=0;
-            SQL
-            )"
-            if [ "${V18_FAIL_COUNT:-0}" != "0" ]; then
-              echo "ERROR: still have failed v18 row(s) in flyway_schema_history."
-              exit 1
-            fi
-
-            echo "=== [Flyway] repair (as root, on ${DB_NAME}) ==="
-            if [ -z "$ROOT_PASS" ]; then
-              docker run --rm --network "$NET" flyway/flyway:11 \
-                -url="jdbc:mysql://db:3306/${DB_NAME}?serverTimezone=Asia/Seoul" \
-                -user="root" -password="" repair
-            else
-              docker run --rm --network "$NET" flyway/flyway:11 \
-                -url="jdbc:mysql://db:3306/${DB_NAME}?serverTimezone=Asia/Seoul" \
-                -user="root" -password="${ROOT_PASS}" repair
-            fi
-            # ============================================================
 
             docker rm -f campus-server 2>/dev/null || true
-            docker ps -a --filter "name=_campus-server" -q | xargs -r docker rm -f || true
+            docker ps -a --filter "name=_campus-server" -q | xargs -r docker rm -f
 
             cat > docker-compose.prod.yml <<EOF
             version: '3.8'
@@ -215,7 +208,7 @@ jobs:
               (ss -lntp || netstat -lntp) 2>/dev/null || true
               env | grep -E "SPRING_|JAVA|SERVER" || true
               (wget -qS -O- http://127.0.0.1:8080/ 2>&1 | head -n 20) || true
-              (wget -qS -O- http://127.0.0.1:8080/api/v1/health 2>&1 | head -n 80) || true
+              (wget -qS -O- http://127.0.0.1:8080/api/v1/health 2>&1 | head -n 50) || true
             ' || true
 
             echo "=== host curl ==="
@@ -224,5 +217,5 @@ jobs:
             echo "=== wait 120s then curl ==="
             sleep 120
             docker logs --tail 400 campus-server || true
-            docker exec campus-server sh -lc 'wget -qS -O- http://127.0.0.1:8080/api/v1/health 2>&1 | head -n 120 || true' || true
+            docker exec campus-server sh -lc 'wget -qS -O- http://127.0.0.1:8080/api/v1/health 2>&1 | head -n 80 || true' || true
             curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null
