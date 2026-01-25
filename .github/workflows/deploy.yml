@@ -79,27 +79,92 @@ jobs:
             # (Optional) quick DNS check
             docker run --rm --network "$NET" busybox nslookup db || true
 
-            # === Fix Flyway failed migration V18 (server-side) ===
-            # Show any failed rows for v18
-            docker run --rm --network "$NET" mysql:8.0 \
-              mysql -h db -u"${DB_USER}" -p"${DB_PASS}" "${DB_NAME}" \
-              -e "SELECT installed_rank, version, description, success, installed_on FROM flyway_schema_history WHERE version='18' ORDER BY installed_rank;" || true
+            # === Fix Flyway failed migration V18 (server-side, FORCE via root) ===
 
-            # Delete ONLY the failed history row(s) for v18 (success=0)
-            docker run --rm --network "$NET" mysql:8.0 \
-              mysql -h db -u"${DB_USER}" -p"${DB_PASS}" "${DB_NAME}" \
-              -e "DELETE FROM flyway_schema_history WHERE version='18' AND success=0;" || true
+            echo "=== [DB] detect root password from container env / fallbacks ==="
+            ROOT_ENV_PASS="$(docker exec "$DB_CONTAINER" sh -lc 'printf "%s" "${MYSQL_ROOT_PASSWORD:-}"' || true)"
 
-            # Repair (cleans checksums + failed flags if any remain)
-            docker run --rm --network "$NET" flyway/flyway:11 \
-              -url="jdbc:mysql://db:3306/${DB_NAME}?serverTimezone=Asia/Seoul" \
-              -user="${DB_USER}" -password="${DB_PASS}" repair || true
+            try_mysql_root() {
+              local pass="$1"
+              if [ -z "$pass" ]; then
+                docker run --rm --network "$NET" mysql:8.0 \
+                  mysql -h db -uroot -e "SELECT 1;" >/dev/null 2>&1
+              else
+                docker run --rm --network "$NET" mysql:8.0 \
+                  mysql -h db -uroot -p"$pass" -e "SELECT 1;" >/dev/null 2>&1
+              fi
+            }
 
-            # Re-check v18 rows after cleanup
-            docker run --rm --network "$NET" mysql:8.0 \
-              mysql -h db -u"${DB_USER}" -p"${DB_PASS}" "${DB_NAME}" \
-              -e "SELECT installed_rank, version, description, success, installed_on FROM flyway_schema_history WHERE version='18' ORDER BY installed_rank;" || true
-            # ================================================
+            ROOT_PASS=""
+            if [ -n "$ROOT_ENV_PASS" ] && try_mysql_root "$ROOT_ENV_PASS"; then
+              ROOT_PASS="$ROOT_ENV_PASS"
+            else
+              for cand in "" "root" "password" "${DB_PASS}"; do
+                if try_mysql_root "$cand"; then
+                  ROOT_PASS="$cand"
+                  break
+                fi
+              done
+            fi
+
+            if ! try_mysql_root "$ROOT_PASS"; then
+              echo "ERROR: Cannot connect to MySQL as root. Check MYSQL_ROOT_PASSWORD in DB container env."
+              echo "DB container env (filtered):"
+              docker exec "$DB_CONTAINER" sh -lc 'env | grep -E "MYSQL_|MARIADB_" || true'
+              exit 1
+            fi
+
+            mysql_root() {
+              local sql="$1"
+              if [ -z "$ROOT_PASS" ]; then
+                docker run --rm --network "$NET" mysql:8.0 \
+                  mysql -h db -uroot "${DB_NAME}" -e "$sql"
+              else
+                docker run --rm --network "$NET" mysql:8.0 \
+                  mysql -h db -uroot -p"$ROOT_PASS" "${DB_NAME}" -e "$sql"
+              fi
+            }
+
+            echo "=== [DB] before ==="
+            mysql_root "SELECT installed_rank, version, description, success, installed_on
+                        FROM flyway_schema_history
+                        WHERE version='18'
+                        ORDER BY installed_rank;"
+
+            echo "=== [DB] delete failed row(s) v18 (success=0) ==="
+            mysql_root "DELETE FROM flyway_schema_history WHERE version='18' AND success=0;
+                        SELECT ROW_COUNT() AS deleted_rows;"
+
+            echo "=== [DB] after ==="
+            mysql_root "SELECT installed_rank, version, description, success, installed_on
+                        FROM flyway_schema_history
+                        WHERE version='18'
+                        ORDER BY installed_rank;"
+
+            echo "=== [DB] assert no failed v18 remains ==="
+            FAIL_COUNT="$(mysql_root "SELECT COUNT(*) AS c FROM flyway_schema_history WHERE version='18' AND success=0;" | tail -n1 | tr -d '\r' )"
+            if [ "${FAIL_COUNT:-0}" != "0" ]; then
+              echo "ERROR: still have failed v18 row(s) in flyway_schema_history."
+              exit 1
+            fi
+
+            echo "=== [Flyway] repair (as root, optional) ==="
+            if [ -z "$ROOT_PASS" ]; then
+              docker run --rm --network "$NET" flyway/flyway:11 \
+                -url="jdbc:mysql://db:3306/${DB_NAME}?serverTimezone=Asia/Seoul" \
+                -user="root" -password="" repair
+            else
+              docker run --rm --network "$NET" flyway/flyway:11 \
+                -url="jdbc:mysql://db:3306/${DB_NAME}?serverTimezone=Asia/Seoul" \
+                -user="root" -password="${ROOT_PASS}" repair
+            fi
+
+            echo "=== [DB] final check v18 ==="
+            mysql_root "SELECT installed_rank, version, description, success, installed_on
+                        FROM flyway_schema_history
+                        WHERE version='18'
+                        ORDER BY installed_rank;"
+            # ============================================================
 
             docker rm -f campus-server 2>/dev/null || true
             docker ps -a --filter "name=_campus-server" -q | xargs -r docker rm -f
