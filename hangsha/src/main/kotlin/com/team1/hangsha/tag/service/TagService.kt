@@ -3,6 +3,7 @@ package com.team1.hangsha.tag.service
 import com.team1.hangsha.common.error.DomainException
 import com.team1.hangsha.common.error.ErrorCode
 import com.team1.hangsha.tag.dto.*
+import com.team1.hangsha.tag.dto.core.TagDto
 import com.team1.hangsha.tag.model.Tag
 import com.team1.hangsha.tag.repository.TagRepository
 import org.springframework.stereotype.Service
