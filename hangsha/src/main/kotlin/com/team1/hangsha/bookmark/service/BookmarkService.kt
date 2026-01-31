@@ -72,7 +72,6 @@ private fun Event.toEventDtoBookmarked(): EventDto = EventDto(
     location = location,
     applyLink = applyLink,
     tags = tags,
-    mainContentHtml = mainContentHtml,
     isInterested = null,
     matchedInterestPriority = null,
     isBookmarked = true,
