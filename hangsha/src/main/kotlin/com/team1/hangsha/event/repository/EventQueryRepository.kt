@@ -25,7 +25,7 @@ class EventQueryRepository(
             append(
                 """
             SELECT e.*
-            FROM e.events
+            FROM events e
             WHERE (
               (e.event_start IS NOT NULL AND e.event_start < :toEndExclusive AND COALESCE(e.event_end, e.event_start) >= :fromStart)
               OR
