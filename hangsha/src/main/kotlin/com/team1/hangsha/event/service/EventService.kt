@@ -11,6 +11,7 @@ import com.team1.hangsha.event.dto.response.TitleSearchEventResponse
 import com.team1.hangsha.event.model.Event
 import com.team1.hangsha.event.repository.EventQueryRepository
 import com.team1.hangsha.event.repository.EventRepository
+import com.team1.hangsha.user.repository.UserInterestCategoryRepository
 import org.springframework.stereotype.Service
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -20,15 +21,17 @@ import kotlin.math.max
 class EventService(
     private val eventRepository: EventRepository,
     private val eventQueryRepository: EventQueryRepository,
+    private val userInterestCategoryRepository: UserInterestCategoryRepository,
     private val bookmarkRepository: BookmarkRepository,
 ) {
+
     fun getMonthEvents(
         from: LocalDate,
         to: LocalDate,
         statusIds: List<Long>?,
         eventTypeIds: List<Long>?,
         orgIds: List<Long>?,
-        previewSize: Int = 3,
+        userId: Long?,
     ): MonthEventResponse {
         if (from.isAfter(to)) {
             throw DomainException(ErrorCode.INVALID_REQUEST, "from은 to보다 이후일 수 없습니다")
@@ -43,9 +46,12 @@ class EventService(
             statusIds = statusIds,
             eventTypeIds = eventTypeIds,
             orgIds = orgIds,
+            userId = userId,
         )
 
-        // 날짜별 버킷: 그 날과 겹치면 포함 (day overlap과 동일한 개념)
+        val interestPriorityByCategoryId = loadInterestMap(userId)
+
+        // 날짜별 버킷: "그 날과 겹치면 포함"
         val buckets = linkedMapOf<LocalDate, MutableList<Event>>().apply {
             var d = from
             while (!d.isAfter(to)) {
@@ -71,6 +77,13 @@ class EventService(
             }
         }
 
+        val auth = userId != null
+        val bookmarkedIds: Set<Long> =
+            if (auth) bookmarkRepository.findBookmarkedEventIdsIn(
+                userId,
+                events.mapNotNull { it.id }
+            ) else emptySet()
+
         val byDate = buckets
             .filterValues { it.isNotEmpty() }
             .toSortedMap()
@@ -79,8 +92,11 @@ class EventService(
                     compareBy<Event> { effectiveStart(it) }.thenBy { it.id ?: Long.MAX_VALUE }
                 )
                 MonthEventResponse.DayBucket(
-                    total = sorted.size,
-                    preview = sorted.take(previewSize).map { it.toDto() },
+                    events = sorted.map { e ->
+                        val matchedPriority = e.matchedInterestPriority(interestPriorityByCategoryId)
+                        val isBookmarked = if (auth) bookmarkedIds.contains(requireNotNull(e.id)) else null
+                        e.toDto(auth, matchedPriority, isBookmarked)
+                    },
                 )
             }
             .mapKeys { (date, _) -> date.toString() }
@@ -96,16 +112,15 @@ class EventService(
             DomainException(ErrorCode.EVENT_NOT_FOUND)
         }
 
-        val isBookmarked: Boolean? = userId?.let { uid ->
-            bookmarkRepository.exists(uid, eventId)
-        }
+        val interestPriorityByCategoryId = loadInterestMap(userId)
+        val matchedPriority = event.matchedInterestPriority(interestPriorityByCategoryId)
+        val isBookmarked: Boolean? = userId?.let { bookmarkRepository.exists(it, eventId) }
 
-        return event.toDetailResponse(isBookmarked)
+        return event.toDetailResponse(auth = userId != null, matchedPriority = matchedPriority, isBookmarked = isBookmarked)
     }
 
-    // 기존 코드 호환용
-    fun getEventDetail(eventId: Long): DetailEventResponse =
-        getEventDetail(eventId, null)
+    // 기존 호출부 호환용
+    fun getEventDetail(eventId: Long): DetailEventResponse = getEventDetail(eventId, null)
 
     fun getDayEvents(
         date: LocalDate,
@@ -114,10 +129,24 @@ class EventService(
         statusIds: List<Long>?,
         eventTypeIds: List<Long>?,
         orgIds: List<Long>?,
+        userId: Long?,
     ): DayEventResponse {
-        val total = eventQueryRepository.countOnDay(date, statusIds, eventTypeIds, orgIds)
-        val items = eventQueryRepository.findOnDayPaged(date, statusIds, eventTypeIds, orgIds, page, size)
-            .map { it.toDto() }
+        val total = eventQueryRepository.countOnDay(date, statusIds, eventTypeIds, orgIds, userId)
+        val events = eventQueryRepository.findOnDayPaged(date, statusIds, eventTypeIds, orgIds, page, size, userId)
+
+        val interestPriorityByCategoryId = loadInterestMap(userId)
+        val auth = userId != null
+        val bookmarkedIds: Set<Long> =
+            if (auth) bookmarkRepository.findBookmarkedEventIdsIn(
+                userId,
+                events.mapNotNull { it.id }
+            ) else emptySet()
+
+        val items = events.map { e ->
+            val matchedPriority = e.matchedInterestPriority(interestPriorityByCategoryId)
+            val isBookmarked = if (auth) bookmarkedIds.contains(requireNotNull(e.id)) else null
+            e.toDto(auth, matchedPriority, isBookmarked)
+        }
 
         return DayEventResponse(
             page = max(1, page),
@@ -132,6 +161,7 @@ class EventService(
         query: String,
         page: Int,
         size: Int,
+        userId: Long?,
     ): TitleSearchEventResponse {
         val q = query.trim()
         if (q.isEmpty()) {
@@ -142,9 +172,22 @@ class EventService(
         val safeSize = max(1, size)
         val offset = (safePage - 1) * safeSize
 
-        val total = eventQueryRepository.countByTitleContains(q)
-        val items = eventQueryRepository.findByTitleContainsPaged(q, offset, safeSize)
-            .map { it.toDto() }
+        val total = eventQueryRepository.countByTitleContains(q, userId)
+        val events = eventQueryRepository.findByTitleContainsPaged(q, offset, safeSize, userId)
+
+        val interestPriorityByCategoryId = loadInterestMap(userId)
+        val auth = userId != null
+        val bookmarkedIds: Set<Long> =
+            if (auth) bookmarkRepository.findBookmarkedEventIdsIn(
+                userId,
+                events.mapNotNull { it.id }
+            ) else emptySet()
+
+        val items = events.map { e ->
+            val matchedPriority = e.matchedInterestPriority(interestPriorityByCategoryId)
+            val isBookmarked = if (auth) bookmarkedIds.contains(requireNotNull(e.id)) else null
+            e.toDto(auth, matchedPriority, isBookmarked)
+        }
 
         return TitleSearchEventResponse(
             page = safePage,
@@ -153,51 +196,75 @@ class EventService(
             items = items,
         )
     }
+
+    private fun loadInterestMap(userId: Long?): Map<Long, Int> {
+        if (userId == null) return emptyMap()
+        return userInterestCategoryRepository.findAllWithCategoryByUserId(userId)
+            .associate { it.categoryId to it.priority }
+    }
 }
 
-private fun Event.toDto(): EventDto = EventDto(
-    id = requireNotNull(id),
-    title = title,
-    imageUrl = imageUrl,
-    operationMode = operationMode,
-    statusId = statusId,
-    eventTypeId = eventTypeId,
-    orgId = orgId,
-    applyStart = applyStart,
-    applyEnd = applyEnd,
-    eventStart = eventStart,
-    eventEnd = eventEnd,
-    capacity = capacity,
-    applyCount = applyCount,
-    organization = organization,
-    location = location,
-    applyLink = applyLink,
-    isInterested = null,
-    matchedInterestPriority = null,
-    isBookmarked = null,
-    tags = tags,
-)
+private fun Event.matchedInterestPriority(priorityByCategoryId: Map<Long, Int>): Int? {
+    if (priorityByCategoryId.isEmpty()) return null
+    val p1 = statusId?.let { priorityByCategoryId[it] }
+    val p2 = eventTypeId?.let { priorityByCategoryId[it] }
+    val p3 = orgId?.let { priorityByCategoryId[it] }
+    return listOfNotNull(p1, p2, p3).minOrNull()
+}
 
-private fun Event.toDetailResponse(isBookmarked: Boolean?): DetailEventResponse = DetailEventResponse(
-    id = requireNotNull(id),
-    title = title,
-    imageUrl = imageUrl,
-    operationMode = operationMode,
-    statusId = statusId,
-    eventTypeId = eventTypeId,
-    orgId = orgId,
-    applyStart = applyStart,
-    applyEnd = applyEnd,
-    eventStart = eventStart,
-    eventEnd = eventEnd,
-    capacity = capacity,
-    applyCount = applyCount,
-    organization = organization,
-    location = location,
-    applyLink = applyLink,
-    isInterested = null,
-    matchedInterestPriority = null,
-    isBookmarked = isBookmarked,
-    tags = tags,
-    detail = mainContentHtml,
-)
+private fun Event.toDto(auth: Boolean, matchedPriority: Int?, isBookmarked: Boolean?): EventDto {
+    val isInterested = if (auth) matchedPriority != null else null
+    val matched = if (auth) matchedPriority else null
+
+    return EventDto(
+        id = requireNotNull(id),
+        title = title,
+        imageUrl = imageUrl,
+        operationMode = operationMode,
+        statusId = statusId,
+        eventTypeId = eventTypeId,
+        orgId = orgId,
+        applyStart = applyStart,
+        applyEnd = applyEnd,
+        eventStart = eventStart,
+        eventEnd = eventEnd,
+        capacity = capacity,
+        applyCount = applyCount,
+        organization = organization,
+        location = location,
+        applyLink = applyLink,
+        tags = tags,
+        isInterested = isInterested,
+        matchedInterestPriority = matched,
+        isBookmarked = isBookmarked,
+    )
+}
+
+private fun Event.toDetailResponse(auth: Boolean, matchedPriority: Int?, isBookmarked: Boolean?): DetailEventResponse {
+    val isInterested = if (auth) matchedPriority != null else null
+    val matched = if (auth) matchedPriority else null
+
+    return DetailEventResponse(
+        id = requireNotNull(id),
+        title = title,
+        imageUrl = imageUrl,
+        operationMode = operationMode,
+        statusId = statusId,
+        eventTypeId = eventTypeId,
+        orgId = orgId,
+        applyStart = applyStart,
+        applyEnd = applyEnd,
+        eventStart = eventStart,
+        eventEnd = eventEnd,
+        capacity = capacity,
+        applyCount = applyCount,
+        organization = organization,
+        location = location,
+        applyLink = applyLink,
+        tags = tags,
+        isInterested = isInterested,
+        matchedInterestPriority = matched,
+        isBookmarked = isBookmarked,
+        detail = mainContentHtml,
+    )
+}

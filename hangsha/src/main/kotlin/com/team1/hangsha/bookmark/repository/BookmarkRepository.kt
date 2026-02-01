@@ -70,17 +70,22 @@ class BookmarkRepository(
         return jdbc.query(sql, params) { rs, _ -> rs.toEvent() }
     }
 
-    /** apply_count를 "북마크 수"로 쓰는 현재 설계 유지 */
-    fun incrementApplyCount(eventId: Long, delta: Int) {
-        if (delta == 0) return
+    fun findBookmarkedEventIdsIn(userId: Long, eventIds: List<Long>): Set<Long> {
+        if (eventIds.isEmpty()) return emptySet()
 
-        val sql = if (delta > 0) {
-            """UPDATE events SET apply_count = apply_count + 1 WHERE id = :eventId"""
-        } else {
-            """UPDATE events SET apply_count = GREATEST(apply_count - 1, 0) WHERE id = :eventId"""
-        }
+        val sql = """
+            SELECT b.event_id
+            FROM bookmarks b
+            WHERE b.user_id = :userId
+              AND b.event_id IN (:eventIds)
+        """.trimIndent()
 
-        jdbc.update(sql.trimIndent(), mapOf("eventId" to eventId))
+        val params = mapOf(
+            "userId" to userId,
+            "eventIds" to eventIds,
+        )
+
+        return jdbc.query(sql, params) { rs, _ -> rs.getLong("event_id") }.toSet()
     }
 }
 
