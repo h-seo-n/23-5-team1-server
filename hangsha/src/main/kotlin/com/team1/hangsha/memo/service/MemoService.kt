@@ -45,6 +45,7 @@ class MemoService(
         val memo = memoRepository.findById(memoId)
             .orElseThrow { DomainException(ErrorCode.MEMO_NOT_FOUND) }
 
+        // 본인의 메모인지 검증
         if (memo.userId != userId) {
             throw DomainException(ErrorCode.MEMO_NOT_FOUND)
         }
@@ -89,15 +90,13 @@ class MemoService(
         }
     }
 
-    // 요청하신 특정 메모 태그 조회 기능
     @Transactional(readOnly = true)
     fun getTagsByMemoId(userId: Long, memoId: Long): List<MemoTagResponse> {
         val memo = memoRepository.findById(memoId)
             .orElseThrow { DomainException(ErrorCode.MEMO_NOT_FOUND) }
 
-        if(memo.userId != userId) throw DomainException(ErrorCode.MEMO_NOT_FOUND)
+        if (memo.userId != userId) throw DomainException(ErrorCode.MEMO_NOT_FOUND)
 
-        // import com.team1.hangsha.memo.dto.core.MemoTagResponse 가 없으면 여기서 에러가 납니다.
         return memo.tags.mapNotNull { ref ->
             tagRepository.findById(ref.tagId)
                 .map { MemoTagResponse(it.id!!, it.name) }
@@ -105,7 +104,6 @@ class MemoService(
         }
     }
 
-    // --- Helper Methods ---
 
     private fun resolveTags(userId: Long, tagNames: List<String>): Set<MemoTagRef> {
         return tagNames.distinct().map { name ->
