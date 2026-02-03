@@ -84,3 +84,18 @@ jwt:
 # Variable for the crawler
 crawler:
   events-json-path: tools/extra-snu-crawler/events.json
+
+oauth2:
+  google:
+    client-id: ${GOOGLE_CLIENT_ID}
+    client-secret: ${GOOGLE_CLIENT_SECRET}
+    redirect-uri: "https://hangsha.site/login/callback/google"
+
+  kakao:
+    client-id: ${KAKAO_CLIENT_ID}
+    redirect-uri: "https://hangsha.site/login/callback/kakao"
+
+  naver:
+    client-id: ${NAVER_CLIENT_ID}
+    client-secret: ${NAVER_CLIENT_SECRET}
+    redirect-uri: "https://hangsha.site/login/callback/naver"
