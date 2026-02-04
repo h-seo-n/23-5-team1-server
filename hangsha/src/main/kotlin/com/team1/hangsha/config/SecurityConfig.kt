@@ -64,6 +64,7 @@ class SecurityConfig(
                         "/api/v1/categories/**",
                         // @TODO: 자동 크롤링 시 삭제 필요
                         "/admin/events/sync",
+                        "/admin/events/delete",
                     ).permitAll()
                     .anyRequest().authenticated()
             }
