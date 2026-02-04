@@ -1,6 +1,7 @@
 package com.team1.hangsha.event.repository
 
 import com.team1.hangsha.event.model.Event
+import org.springframework.data.jdbc.repository.query.Modifying
 import org.springframework.data.jdbc.repository.query.Query
 import org.springframework.data.repository.CrudRepository
 import org.springframework.data.repository.query.Param
@@ -25,4 +26,8 @@ interface EventRepository : CrudRepository<Event, Long> {
         @Param("keyStart") keyStart: LocalDateTime?,
         @Param("keyEnd") keyEnd: LocalDateTime?,
     ): Event?
+
+    @Modifying
+    @Query("DELETE FROM events")
+    fun deleteAllEventsRaw(): Int
 }
