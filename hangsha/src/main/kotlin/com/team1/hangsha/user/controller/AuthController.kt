@@ -5,8 +5,6 @@ import com.team1.hangsha.user.dto.LoginResponse
 import com.team1.hangsha.user.dto.RegisterRequest
 import com.team1.hangsha.user.dto.RegisterResponse
 import com.team1.hangsha.user.dto.RefreshResponse
-//import com.team1.hangsha.user.dto.OAuthExchangeRequest
-//import com.team1.hangsha.user.dto.OAuthExchangeResponse
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping

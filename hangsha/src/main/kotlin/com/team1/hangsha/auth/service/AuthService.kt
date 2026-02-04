@@ -2,7 +2,6 @@ package com.team1.hangsha.auth.service
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.team1.hangsha.auth.dto.SocialLoginRequest
-import com.team1.hangsha.auth.dto.TokenResponse
 import com.team1.hangsha.auth.dto.SocialLoginResult
 import com.team1.hangsha.common.error.DomainException
 import com.team1.hangsha.common.error.ErrorCode
