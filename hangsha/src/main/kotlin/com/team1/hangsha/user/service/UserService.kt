@@ -15,8 +15,8 @@ import org.springframework.beans.factory.annotation.Value
 import com.team1.hangsha.user.AuthCookieSupport
 import com.team1.hangsha.user.model.RefreshToken
 import com.team1.hangsha.user.TokenHasher
-import com.team1.hangsha.user.repository.OAuthLoginCodeRepository
-import com.team1.hangsha.user.model.OAuthLoginCode
+//import com.team1.hangsha.user.repository.OAuthLoginCodeRepository
+//import com.team1.hangsha.user.model.OAuthLoginCode
 import java.time.Duration
 import java.util.UUID
 import com.fasterxml.jackson.databind.JsonNode
@@ -34,7 +34,7 @@ class UserService(
     private val jwtTokenProvider: JwtTokenProvider,
     private val userIdentityRepository: UserIdentityRepository,
     private val refreshTokenRepository: RefreshTokenRepository,
-    private val oauthLoginCodeRepository: OAuthLoginCodeRepository,
+//    private val oauthLoginCodeRepository: OAuthLoginCodeRepository,
     private val tokenHasher: TokenHasher,
     private val cookieSupport: AuthCookieSupport,
     @Value("\${jwt.refresh-expiration-ms}") private val refreshExpirationMs: Long,
