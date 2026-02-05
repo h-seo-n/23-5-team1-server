@@ -23,12 +23,13 @@ class AuthService(
     private val userRepository: UserRepository,
     private val userService: UserService,
 
-    // application.yml에서 값을 가져옵니다.
     @Value("\${oauth2.google.client-id}") val googleClientId: String,
     @Value("\${oauth2.google.client-secret}") val googleClientSecret: String,
     @Value("\${oauth2.google.redirect-uri}") val googleRedirectUri: String,
 
+    // [수정됨] 카카오 시크릿 추가
     @Value("\${oauth2.kakao.client-id}") val kakaoClientId: String,
+    @Value("\${oauth2.kakao.client-secret}") val kakaoClientSecret: String,
     @Value("\${oauth2.kakao.redirect-uri}") val kakaoRedirectUri: String,
 
     @Value("\${oauth2.naver.client-id}") val naverClientId: String,
@@ -115,6 +116,8 @@ class AuthService(
             add("client_id", kakaoClientId)
             add("redirect_uri", kakaoRedirectUri)
             add("code", code)
+            // [수정됨] 시크릿 키 파라미터 추가 (KOE010 에러 해결)
+            add("client_secret", kakaoClientSecret)
         }
 
         val request = HttpEntity(params, headers)
