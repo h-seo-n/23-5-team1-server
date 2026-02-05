@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.team1.hangsha.timetable.dto.AddCourseRequest
 import com.team1.hangsha.timetable.dto.AddCourseResponse
 import com.team1.hangsha.timetable.dto.CreateCustomCourseRequest
+import com.team1.hangsha.timetable.dto.UpdateCustomCourseRequest
 import com.team1.hangsha.timetable.dto.EnrollResponse
 import com.team1.hangsha.timetable.dto.ListEnrollsResponse
 import com.team1.hangsha.timetable.service.EnrollService
@@ -14,13 +15,16 @@ import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
+import io.swagger.v3.oas.annotations.Operation
+import io.swagger.v3.oas.annotations.media.Content
+import io.swagger.v3.oas.annotations.media.ExampleObject
+import io.swagger.v3.oas.annotations.media.Schema
 
 @RestController
 @RequestMapping("/api/v1/timetables/{timetableId}/enrolls")
 class EnrollController(
     private val enrollService: EnrollService,
 ) {
-    // GET /api/v1/timetables/{timetableId}/enrolls
     @GetMapping
     fun listEnrolls(
         @Parameter(hidden = true) @LoggedInUser user: User,
@@ -30,7 +34,6 @@ class EnrollController(
         return ResponseEntity.ok(res)
     }
 
-    // GET /api/v1/timetables/{timetableId}/enrolls/{enrollId}
     @GetMapping("/{enrollId}")
     fun getEnroll(
         @Parameter(hidden = true) @LoggedInUser user: User,
@@ -41,7 +44,6 @@ class EnrollController(
         return ResponseEntity.ok(res)
     }
 
-    // POST /api/v1/timetables/{timetableId}/enrolls/custom
     @PostMapping("/custom")
     fun createCustomCourseAndEnroll(
         @Parameter(hidden = true) @LoggedInUser user: User,
@@ -63,19 +65,81 @@ class EnrollController(
 //        return ResponseEntity.status(HttpStatus.CREATED).body(res)
 //    }
 
-    // PATCH /api/v1/timetables/{timetableId}/enrolls/{enrollId}
+
     @PatchMapping("/{enrollId}")
+    @Operation(
+        summary = "Update custom enroll (PATCH)",
+        description = """
+        커스텀 과목(enroll.source=CUSTOM)만 부분 수정합니다.
+
+        ### PATCH 규칙
+        - 필드 미포함: 해당 필드는 변경되지 않습니다.
+        - 요청 바디에 아래 6개 중 **최소 1개 필드**는 포함되어야 합니다.
+          - courseTitle, timeSlots, courseNumber, lectureNumber, credit, instructor
+          - 아무것도 없으면 ENROLL_PATCH_EMPTY
+
+        ### 필드별 정책
+        - courseTitle
+          - **null 금지** → COURSE_TITLE_CANNOT_BE_NULL
+          - **blank 금지**(trim 후 빈 문자열) → COURSE_TITLE_CANNOT_BE_BLANK
+        - timeSlots
+          - **null 금지** → TIME_SLOTS_CANNOT_BE_NULL
+          - **empty 배열 금지** → TIME_SLOTS_CANNOT_BE_EMPTY
+          - 배열을 주면 **replace-all**(기존 슬롯 삭제 후 새 슬롯 저장)
+          - 시간표 내 다른 과목과 겹치면(시간 충돌) 에러
+        - courseNumber / lectureNumber / credit / instructor (optional)
+          - 미포함: 변경 없음
+          - null: 값 삭제(null로 저장)
+          - 값 존재: 업데이트
+    """
+    )
     fun updateCustomEnroll(
         @Parameter(hidden = true) @LoggedInUser user: User,
+
+        @Parameter(description = "시간표 ID", example = "12", required = true)
         @PathVariable timetableId: Long,
+
+        @Parameter(description = "수정할 enrollId", example = "70", required = true)
         @PathVariable enrollId: Long,
+
+        @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            description = "커스텀 과목 PATCH 바디(부분 수정)",
+            content = [
+                Content(
+                    mediaType = "application/json",
+                    schema = Schema(implementation = UpdateCustomCourseRequest::class),
+                    examples = [
+                        ExampleObject(
+                            name = "updateTitleOnly",
+                            summary = "courseTitle만 수정",
+                            value = """{"courseTitle":"Operating Systems"}"""
+                        ),
+                        ExampleObject(
+                            name = "replaceTimeSlots",
+                            summary = "timeSlots 전체 교체(replace-all)",
+                            value = """{"timeSlots":[{"dayOfWeek":"MON","startAt":"10:30","endAt":"11:45"}]}"""
+                        ),
+                        ExampleObject(
+                            name = "clearOptionalFields",
+                            summary = "optional 필드 삭제(null)",
+                            value = """{"courseNumber":null,"lectureNumber":null,"instructor":null}"""
+                        ),
+                        ExampleObject(
+                            name = "updateMixed",
+                            summary = "여러 필드 동시 수정",
+                            value = """{"courseTitle":"OS","credit":3,"instructor":"Kim"}"""
+                        )
+                    ]
+                )
+            ]
+        )
         @RequestBody body: JsonNode,
     ): ResponseEntity<EnrollResponse> {
         val res = enrollService.updateCustomEnroll(user.id!!, timetableId, enrollId, body)
         return ResponseEntity.ok(res)
     }
 
-    // DELETE /api/v1/timetables/{timetableId}/enrolls/{enrollId}
     @DeleteMapping("/{enrollId}")
     fun deleteEnroll(
         @Parameter(hidden = true) @LoggedInUser user: User,
