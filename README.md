@@ -85,6 +85,10 @@ https://hangsha.site/
 <img width="1173" height="692" alt="image" src="https://github.com/user-attachments/assets/3d2676d3-409b-4fb9-8efe-e04915f82e71" />
 
 ### 마이페이지
+<img width="1470" height="920" alt="스크린샷 2026-02-07 14 53 56" src="https://github.com/user-attachments/assets/ae788ddd-17bb-41b6-85aa-4074830a91b9" />
+<img width="1470" height="920" alt="스크린샷 2026-02-07 14 54 03" src="https://github.com/user-attachments/assets/892ba95f-1619-418f-8a96-23e27eda3f88" />
+
+
 
 ### 북마크
 <img width="1169" height="696" alt="image" src="https://github.com/user-attachments/assets/d5b30f49-a03a-42b7-8277-63af5755e63e" />
